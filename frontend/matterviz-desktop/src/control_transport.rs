@@ -56,7 +56,7 @@ impl From<ControlError> for ControlTransportError {
 }
 
 pub struct ControlTransport {
-    reader: Option<platform::PipeReader>,
+    reader: Mutex<Option<platform::PipeReader>>,
     writer: Mutex<Option<platform::PipeWriter>>,
 }
 
@@ -70,7 +70,7 @@ impl ControlTransport {
         let reader = platform::PipeReader::adopt(config.read_pipe)?;
         let writer = platform::PipeWriter::adopt(config.write_pipe)?;
         Ok(Self {
-            reader: Some(reader),
+            reader: Mutex::new(Some(reader)),
             writer: Mutex::new(Some(writer)),
         })
     }
@@ -116,8 +116,12 @@ impl ControlTransport {
     }
 
     #[cfg(test)]
-    pub fn read_frame(&mut self) -> Result<ControlFrame, ControlTransportError> {
-        let reader = self.reader.as_mut().ok_or(ControlTransportError::Closed)?;
+    pub fn read_frame(&self) -> Result<ControlFrame, ControlTransportError> {
+        let mut guard = self
+            .reader
+            .lock()
+            .map_err(|_| ControlTransportError::Closed)?;
+        let reader = guard.as_mut().ok_or(ControlTransportError::Closed)?;
         let mut header = [0_u8; HEADER_BYTES];
         read_exact(reader, &mut header)?;
         let parsed = decode_header(&header)?;
@@ -132,10 +136,14 @@ impl ControlTransport {
 
     /// Read one complete frame, including its header and body, before `timeout` expires.
     pub fn read_frame_timeout(
-        &mut self,
+        &self,
         timeout: Duration,
     ) -> Result<ControlFrame, ControlTransportError> {
-        let reader = self.reader.as_mut().ok_or(ControlTransportError::Closed)?;
+        let mut guard = self
+            .reader
+            .lock()
+            .map_err(|_| ControlTransportError::Closed)?;
+        let reader = guard.as_mut().ok_or(ControlTransportError::Closed)?;
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(ControlTransportError::Timeout)?;
@@ -151,8 +159,10 @@ impl ControlTransport {
         Ok(decode_frame(&frame)?)
     }
 
-    pub fn close(&mut self) {
-        self.reader.take();
+    pub fn close(&self) {
+        if let Ok(mut reader) = self.reader.lock() {
+            reader.take();
+        }
         if let Ok(mut writer) = self.writer.lock() {
             writer.take();
         }
@@ -439,7 +449,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let mut input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let mut output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
@@ -468,7 +478,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let _input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let _output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
@@ -488,7 +498,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let mut input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let _output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
@@ -518,7 +528,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let mut input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let _output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
@@ -551,7 +561,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let _output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
@@ -566,7 +576,7 @@ mod tests {
         let (read_out, write_out) = pipe();
         let mut input = unsafe { std::fs::File::from_raw_fd(write_in) };
         let _output = unsafe { std::fs::File::from_raw_fd(read_out) };
-        let mut transport = ControlTransport::adopt(ControlTransportConfig {
+        let transport = ControlTransport::adopt(ControlTransportConfig {
             read_pipe: read_in as u64,
             write_pipe: write_out as u64,
         })
